@@ -386,7 +386,7 @@ class Layers:
             hazard = hazard_layer.getFeature(feature_id)
 
             if hazard.geometry().contains(point_geom):
-                hazard_class = hazard["class"] 
+                hazard_class = hazard["class"]  
                 #print("This part ran")
                 #print(f"hazard_class: {hazard['fid']}, {hazard['class']}, {hazard['legend']}")
             else: 

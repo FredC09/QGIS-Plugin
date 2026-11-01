@@ -1,32 +1,37 @@
-Plugin Builder Results
+# QGIS Borehole Report Generator
 
-Your plugin Layers was created in:
-    C:/Users/Fredd/AppData/Roaming/QGIS/QGIS3/profiles/default/python/plugins\layers
+A Python plugin for automatically generating borehole reports using geospatial data within QGIS.
 
-Your QGIS plugin directory is located at:
-    C:/Users/Fredd/AppData/Roaming/QGIS/QGIS3/profiles/default/python/plugins
+## Overview
 
-What's Next:
+The plugin operates within QGIS, allowing users to select a borehole location directly from the map. It retrieves relevant information from the available geospatial layers and uses this data to populate a predefined Microsoft Word document `report_template.docx`.
 
-  * Copy the entire directory containing your new plugin to the QGIS plugin
-    directory
+## Demonstration
 
-  * Compile the resources file using pyrcc5
+![QGIS Borehole Report Generator Demo](images/demo.gif)
 
-  * Run the tests (``make test``)
+## How It Works
 
-  * Test the plugin by enabling it in the QGIS plugin manager
+1. Select a point representing a borehole from the map in QGIS.
+2. Retrieve data from multiple geospatial layers, including Shapefiles, GeoPackages and Web Map Service (WMS) layers, and store it in a Python dictionary.
+3. Use the data stored in the dictionary to populate the Microsoft Word document.
+4. Allow the user to choose where to save the report and what filename to give it.
 
-  * Customize it by editing the implementation file: ``Layers.py``
+## Technologies Used
 
-  * Create your own custom icon, replacing the default icon.png
+- Python
+- QGIS
+- PyQGIS
+- Microsoft Word
 
-  * Modify your user interface by opening Layers_dialog_base.ui in Qt Designer
+## Geospatial Data Sources
 
-  * You can use the Makefile to compile your Ui and resource files when
-    you make changes. This requires GNU make (gmake)
+- Shapefile
+- GeoPackage (GPKG)
+- Web Map Service (WMS)
 
-For more information, see the PyQGIS Developer Cookbook at:
-http://www.qgis.org/pyqgis-cookbook/index.html
+## Notes
 
-(C) 2011-2018 GeoApt LLC - geoapt.com
+This plugin is fully functional but remains under active development, with further improvements ongoing.
+
+This plugin is proprietary software developed for Aquifer Energy. The company has given permission for the code to be publicly viewed.

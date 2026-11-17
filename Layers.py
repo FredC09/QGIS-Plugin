@@ -189,7 +189,7 @@ class Layers:
             self.iface.removeToolBarIcon(action)
 
 
-    def run(self):
+    def run(self, checked=False, coordinates=None, output_path=None):
         """Run method that performs all the real work"""
 
         from qgis.core import (
@@ -198,31 +198,51 @@ class Layers:
             QgsRaster,
             QgsSpatialIndex,
             QgsWkbTypes, 
+            QgsMapLayer,
+            QgsCoordinateReferenceSystem,
+            QgsCoordinateTransform,
+            QgsGeometry,
+            QgsPointXY,
+            QgsProject,
+            QgsRectangle,
+            QgsRaster,
+            QgsSpatialIndex,
+            QgsWkbTypes, 
             QgsMapLayer
         )
 
-        # Get the selected point
-        point_layer = self.iface.activeLayer()
-
-        if point_layer.type() != QgsMapLayer.VectorLayer:
-            QMessageBox.warning(None, "Invalid layer", "Please select a vector layer.")
-            return
-
-        if point_layer.geometryType() != QgsWkbTypes.PointGeometry:
-            QMessageBox.warning(None, "Invalid layer", "Please select a point layer.")
-            return
-
-        selected = point_layer.selectedFeatures()
-
-        if not selected:
-            QMessageBox.warning(None, "No feature selected", "Please select a feature.")
-            return
+        project = QgsProject.instance() # get the current project instance
 
 
-        point = selected[0] 
-        point_geom = point.geometry()
+        if coordinates is None:
 
+            # Get the selected point
+            point_layer = self.iface.activeLayer()
 
+            if point_layer.type() != QgsMapLayer.VectorLayer:
+                QMessageBox.warning(None, "Invalid layer", "Please select a vector layer.")
+                return
+
+            if point_layer.geometryType() != QgsWkbTypes.PointGeometry:
+                QMessageBox.warning(None, "Invalid layer", "Please select a point layer.")
+                return
+
+            selected = point_layer.selectedFeatures()
+
+            if not selected:
+                QMessageBox.warning(None, "No feature selected", "Please select a feature.")
+                return
+
+            point = selected[0]
+            point_geom = point.geometry()
+            point_crs = point_layer.crs() # Get the CRS of the point layer
+            
+        else: 
+            point_crs = QgsCoordinateReferenceSystem("EPSG:4277") # Sets the CRS of the point to EPSG:4277 
+
+            x, y = coordinates # Unpack the coordinates tuple into x and y variables
+
+            point_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y)) # Create a point geometry from the coordinates
 
 
 
@@ -238,7 +258,50 @@ class Layers:
 
         # WMS layers
         lidar = QgsProject.instance().mapLayersByName("Lidar_Composite_Elevation_DTM_1m")[0]
+
+        lidar_crs = lidar.crs()
+        transform_to_lidar = QgsCoordinateTransform(
+            point_crs,
+            lidar_crs,
+            project,
+        )
+
+
         bedrock = QgsProject.instance().mapLayersByName("GBR BGS 1:50k Bedrock")[0]
+        
+        bedrock_crs = bedrock.crs()
+        transform_to_bedrock = QgsCoordinateTransform(
+            point_crs, 
+            bedrock_crs, 
+            project
+        )
+
+
+
+        # Create geometry objects for each layer and transform them to their layers CRS
+
+        lidar_point_geom = QgsGeometry(point_geom)
+        lidar_point_geom.transform(transform_to_lidar)
+
+        bedrock_point_geom = QgsGeometry(point_geom) # Create a geometry object for the bedrock layer
+        bedrock_point_geom.transform(transform_to_bedrock) # Transform the geometry to the bedrock layers CRS
+
+        hazard_point_geom = QgsGeometry(point_geom) # Create a geometry object for the hazard layer
+        hazard_point_geom.transform(QgsCoordinateTransform(point_crs, hazard_layer.crs(), project)) # Transform the geometry to the hazard layers CRS
+
+        test_point_geom = QgsGeometry(point_geom) # Create a geometry object for the test layer
+        test_point_geom.transform(QgsCoordinateTransform(point_crs, test_layer.crs(), project)) # Transform the geometry to the test layers CRS
+
+        cams_point_geom = QgsGeometry(point_geom) # Create a geometry object for the cams layer
+        cams_point_geom.transform(QgsCoordinateTransform(point_crs, cams_layer.crs(), project)) # Transform the geometry to the cams layers CRS
+
+        spz_point_geom = QgsGeometry(point_geom) # Create a geometry object for the spz layer
+        spz_point_geom.transform(QgsCoordinateTransform(point_crs, spz_layer.crs(), project)) # Transform the geometry to the spz layers CRS
+
+
+
+
+
 
         
         # Create spatial index
@@ -249,10 +312,10 @@ class Layers:
 
 
         # Find polygons
-        hazards_candidate_ids = hazards_index.intersects(point_geom.boundingBox())
-        test_candidate_ids = test_index.intersects(point_geom.boundingBox()) 
-        cams_candidate_ids = cams_index.intersects(point_geom.boundingBox())
-        spz_candidate_ids = spz_index.intersects(point_geom.boundingBox())
+        hazards_candidate_ids = hazards_index.intersects(hazard_point_geom.boundingBox())
+        test_candidate_ids = test_index.intersects(test_point_geom.boundingBox()) 
+        cams_candidate_ids = cams_index.intersects(cams_point_geom.boundingBox())
+        spz_candidate_ids = spz_index.intersects(spz_point_geom.boundingBox())
 
 
         
@@ -269,34 +332,46 @@ class Layers:
         # Make sure geometry exists and isn't empty
         if point_geom and not point_geom.isEmpty():
            
-            point_xy = point_geom.asPoint() # get the xy coordinate of the point
+            point_xy = lidar_point_geom.asPoint() # get the xy coordinate of the point
             
             lidar_provider = lidar.dataProvider() # get the data provider for the raster layer
 
+            # The query_extent defines the area around the point to query for values. In this case, it is a 512x512 pixel area centered on the point
+            query_extent = QgsRectangle(
+                point_xy.x() - 256,
+                point_xy.y() - 256,
+                point_xy.x() + 256,
+                point_xy.y() + 256,
+            )
 
-            canvas = self.iface.mapCanvas()
+
+            # The identify function will look for values in a 512x512 pixel area around the point, with a resolution of 96 dpi
             identify_result = lidar_provider.identify(
                 point_xy,
                 QgsRaster.IdentifyFormatValue,
-                canvas.extent(),
-                canvas.width(),
-                canvas.height(),
-                canvas.logicalDpiX(),
+                query_extent,
+                512,
+                512,
+                96,
             )
 
-            # Check if the identify result is valid and extract the value
+
             if identify_result.isValid():
                 values = identify_result.results()
+                print("Lidar value identify results:", values, flush=True)
                 lidar_class = values.get(1)
             else:
                 html_result = lidar_provider.identify(
                     point_xy,
                     QgsRaster.IdentifyFormatHtml,
-                    canvas.extent(),
-                    canvas.width(),
-                    canvas.height(),
-                    canvas.logicalDpiX(),
+                    query_extent,
+                    512,
+                    512,
+                    96,
                 )
+
+
+
 
                 if html_result.isValid():
                     html = next(iter(html_result.results().values()), "") 
@@ -328,22 +403,31 @@ class Layers:
         # Make sure geometry exists and isn't empty
         if point_geom and not point_geom.isEmpty():
            
-            point_xy = point_geom.asPoint() # get the xy coordinate of the point
+            point_xy = bedrock_point_geom.asPoint() # get the xy coordinate of the point
             
             bedrock_provider = bedrock.dataProvider() # get the data provider for the raster layer
 
 
-            canvas = self.iface.mapCanvas()
+
+            # The query_extent defines the area around the point to query for values. In this case, it is a 512x512 pixel area centered on the point
+            query_extent = QgsRectangle(
+                point_xy.x() - 256,
+                point_xy.y() - 256,
+                point_xy.x() + 256,
+                point_xy.y() + 256,
+            )
+
+
+            # The identify function will look for values in a 512x512 pixel area around the point, with a resolution of 96 dpi
             identify_result = bedrock_provider.identify(
                 point_xy,
                 QgsRaster.IdentifyFormatValue,
-                canvas.extent(),
-                canvas.width(),
-                canvas.height(),
-                canvas.logicalDpiX(),
+                query_extent,
+                512,
+                512,
+                96,
             )
 
-            # Check if the identify result is valid and extract the value
             if identify_result.isValid():
                 values = identify_result.results()
                 bedrock_class = values.get(1)
@@ -351,12 +435,11 @@ class Layers:
                 html_result = bedrock_provider.identify(
                     point_xy,
                     QgsRaster.IdentifyFormatHtml,
-                    canvas.extent(),
-                    canvas.width(),
-                    canvas.height(),
-                    canvas.logicalDpiX(),
+                    query_extent,
+                    512,
+                    512,
+                    96,
                 )
-
                 if html_result.isValid():
                     html = next(iter(html_result.results().values()), "") 
                     
@@ -385,10 +468,9 @@ class Layers:
             #print(f"feature id: {feature_id}")
             hazard = hazard_layer.getFeature(feature_id)
 
-            if hazard.geometry().contains(point_geom):
+            if hazard.geometry().contains(hazard_point_geom):
                 hazard_class = hazard["class"]  
-                #print("This part ran")
-                #print(f"hazard_class: {hazard['fid']}, {hazard['class']}, {hazard['legend']}")
+
             else: 
                 pass   
 
@@ -397,7 +479,7 @@ class Layers:
         for feature_id in test_candidate_ids:
             test = test_layer.getFeature(feature_id)
 
-            if test.geometry().contains(point_geom):
+            if test.geometry().contains(test_point_geom):
                 test_class = test["Name"]
 
             else: 
@@ -408,7 +490,7 @@ class Layers:
         for feature_id in cams_candidate_ids:
             cams = cams_layer.getFeature(feature_id)
 
-            if cams.geometry().contains(point_geom):
+            if cams.geometry().contains(cams_point_geom):
                 cams_class = cams["cams_name"]
 
             else:
@@ -419,7 +501,7 @@ class Layers:
         for feature_id in spz_candidate_ids:
             spz = spz_layer.getFeature(feature_id)
 
-            if spz.geometry().contains(point_geom):
+            if spz.geometry().contains(spz_point_geom):
                 spz_class = spz["number"]
                 
             else:
@@ -431,22 +513,46 @@ class Layers:
         if self.first_start == True: 
             self.first_start = False
 
-        self.dlg = LayersDialog()
 
-        # show the dialog
-        self.dlg.show()
-        # Run the dialog event loop
-        result = self.dlg.exec_()
+        # Manual run from QGIS 
+        if coordinates is None:
+            
+            self.dlg = LayersDialog()
+            result = self.dlg.exec_()
 
+            # Stop if the user pressed Cancel.
+            if not result:
+                return
 
-        chosen_path = self.dlg.file_widget_save.filePath() # get the path from the file widget in the dialog
+            chosen_path = self.dlg.file_widget_save.filePath() # ask where to save
         
-        if chosen_path:
-            # In case they didn't type the extension
-            if not chosen_path.endswith('.docx'):
-                chosen_path += '.docx'
+        
+           
+                    
 
- 
+
+            if not chosen_path:
+                if self.iface is not None:
+                    self.iface.messageBar().pushMessage("Warning", "Please select a valid save location.", level=2)
+                    return
+                raise ValueError("No report output path was provided.")
+
+
+
+       
+        else:
+            # Run from the app useing the path it already chose
+            if not output_path:
+                raise ValueError("An output path is required for automated report generation.")
+
+            chosen_path = output_path
+
+        # Ensure the output path has a .docx extension
+        if not chosen_path.lower().endswith(".docx"):
+            chosen_path += ".docx"
+
+
+        if coordinates is None:
             if os.path.exists(chosen_path):
                 # Create the warning popup box
                 reply = QMessageBox.question(
@@ -456,60 +562,32 @@ class Layers:
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No # Default choice 'No'
                 )
-                    
+
                 # If they click No abort the function right here
                 if reply == QMessageBox.No:
                     self.iface.messageBar().pushMessage("Cancelled", "Save operation aborted.", level=1)
                     return 
 
-                    
-            # get the path to the template file in the plugin directory
-            report_template = os.path.join(os.path.dirname(__file__), 'report_template.docx') 
-
-            document = DocxTemplate(report_template) # create a new document object using the template
-
-            # create a dictionary with the data to be filled in the template
-            data = {
-                'test_class': test_class,
-            }
-
-            document.render(data) # render the data into the document
-            document.save(chosen_path) # save the document to the chosen path
 
 
+        # Create Word document
 
+        report_template = os.path.join(os.path.dirname(__file__), 'report_template.docx') # get the path to the template file in the plugin directory
 
-            # Create Word document
+        document = DocxTemplate(report_template)
 
-            report_template = os.path.join(os.path.dirname(__file__), 'report_template.docx') # get the path to the template file in the plugin directory
+        # create dictionary with the data to be filled in the template
+        data = {
+            'hazard_class': hazard_class,
+            'test_class': test_class,
+            'cams_class': cams_class,
+            'spz_class': spz_class,
+            'lidar_class': lidar_class,
+            'bedrock_class': bedrock_class
+        }
+        document.render(data) # render the data into the document
 
-            document = DocxTemplate(report_template)
+        document.save(chosen_path) # save the document to the chosen path
 
-            # create dictionary with the data to be filled in the template
-            data = {
-                'hazard_class': hazard_class,
-                'test_class': test_class,
-                'cams_class': cams_class,
-                'spz_class': spz_class,
-                'lidar_class': lidar_class,
-                'bedrock_class': bedrock_class
-            }
-            document.render(data) # render the data into the document
-
-            document.save(chosen_path) # save the document to the chosen path
-
+        if coordinates is None:
             self.iface.messageBar().pushMessage("Success", "Document saved successfully.", level=3) # Message to show document saved
-
-        else:
-            # Prompt user or cancel safely if the line edit is empty
-            self.iface.messageBar().pushMessage("Warning", "Please select a valid save location.", level=2)
-
-
-
-
-
-        # See if OK was pressed
-        if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
-            pass
